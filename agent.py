@@ -7,16 +7,13 @@ Read ``environment.md`` beside this file for the rules, helpers, and first impro
 episode state in ``reset``. The constructor takes no arguments.
 """
 
-from sandbox.crane import action, me, tile, visible
+from sandbox.crane import action, me, paths, tile, visible, roster, units, zone
 from sandbox.observation_types import AxialPosition, SkirmishAction, SkirmishObservation
-
 
 class Agent:
     """Marches toward the enemy side, then steps toward the nearest visible enemy."""
 
     def reset(self, seed, observation) -> None:
-        # Called once before each match. The opening observation is available here for
-        # precomputation outside the decision clock. This starter stores no state.
         pass
 
     def act(self, observation: SkirmishObservation) -> SkirmishAction:
@@ -24,22 +21,13 @@ class Agent:
         enemies = visible.enemies(observation)
 
         if not enemies:
-            # At the beginning of a default skirmish match, units sit apart and see no enemies.
-            # me.direction is the digit toward the enemy side, so this unit heads that way.
-            forward = me.direction(observation)
-
-            # legal_steps lists the single steps allowed by the mask. Checking membership keeps
-            # this order legal when a wall, ally, or enemy blocks the way.
-            if forward in action.legal_steps(observation):
-                return action.move(forward)
-
-            # TODO(you): this unit stands still when something blocks the way.
-            # It may still attack, but can you choose a better response?
-            return action.stay()
-
-        # TODO(you): walking toward the nearest enemy is the entire strategy, and it is weak.
-        # An archer should shoot and back away, cavalry should swing wide for a flank, and a
-        # footman should hold the line beside an ally. What should each of your units do?
+            # With no enemy visible, head toward the mirrored position on the enemy side.
+            # Searching all legal paths lets the unit route around walls instead of repeatedly
+            # trying the blocked forward direction.
+            here = me.position(observation)
+            enemy_side_goal = tile.at_mirror(here, observation)
+            path_id = self._path_toward(observation, enemy_side_goal)
+            return action.move(path_id) if path_id else action.stay()
 
         # This unit's current {"q": ..., "r": ...} position.
         here = me.position(observation)
@@ -47,34 +35,82 @@ class Agent:
         # The closest enemy in sight. min returns the enemy dictionary, not the distance.
         nearest = min(enemies, key=lambda enemy: tile.distance(here, enemy["position"]))
 
-        # The step that gets closest to the enemy, or 0 when no step gets closer.
-        step = self._step_toward(observation, nearest["position"])
+        #addition from documentation
+        if me.unit_type(observation) == "archer":
+            path_id = self._retreat_path(observation, nearest["position"])
+        elif me.unit_type(observation) == "cavalry":
+            path_id = self._flanking_path(observation, nearest["position"])
+        else:
+            path_id = self._path_toward(observation, nearest["position"])
 
         # Naming a target makes the strike prefer that enemy. Any visible enemy can be named,
         # so both orders below are legal.
-        if step == 0:
+        if path_id == 0:
             return action.stay(nearest["unit_id"], observation)
-        return action.move(step, nearest["unit_id"], observation)
+        return action.move(path_id, nearest["unit_id"], observation)
 
-    def _step_toward(self, observation: SkirmishObservation, goal: AxialPosition) -> int:
-        """Return the single step that most closes the gap to goal, or 0 when none does."""
-        # TODO(you): only single steps are tried here. A path can contain four steps, and cavalry
-        # has four movement points, so most of that speed goes to waste.
+    def _path_toward(self, observation: SkirmishObservation, goal: AxialPosition) -> int:
+        """Return the legal path that most closes the gap to goal, or 0 when none does."""
         here = me.position(observation)
+        current_distance = tile.distance(here, goal)
+        candidates: list[int] = []
+        best_distance = current_distance
 
-        # Standing still is path id 0. A step must reduce the distance to be worth taking.
-        best_step = 0
+        for path_id in action.legal_paths(observation):
+            if path_id == 0:
+                continue
+
+            path_distance = tile.distance(tile.at_path_end(here, path_id), goal)
+
+            if path_distance < best_distance:
+                candidates = [path_id]
+                best_distance = path_distance
+            elif path_distance == best_distance and path_distance < current_distance:
+                candidates.append(path_id)
+
+        if not candidates:
+            return 0
+        return candidates[0]
+
+    def _retreat_path(self, observation: SkirmishObservation, goal: AxialPosition) -> int:
+        """Return the legal path that maximizes distance from goal, or 0 when none does."""
+        here = me.position(observation)
+        candidates: list[int] = []
         best_distance = tile.distance(here, goal)
 
-        for step in action.legal_steps(observation):
-            # at_path_end gives the landing tile, so this is the distance after the step.
-            step_distance = tile.distance(tile.at_path_end(here, step), goal)
+        for path_id in action.legal_paths(observation):
+            if path_id == 0:
+                continue
 
-            # Remember this step if it is the best one so far.
-            if step_distance < best_distance:
-                best_step, best_distance = step, step_distance
+            path_distance = tile.distance(tile.at_path_end(here, path_id), goal)
+            if path_distance > best_distance:
+                candidates = [path_id]
+                best_distance = path_distance
+            elif path_distance == best_distance and path_distance > tile.distance(here, goal):
+                candidates.append(path_id)
 
-        return best_step
+        return candidates[0] if candidates else 0
+
+    def _flanking_path(self, observation: SkirmishObservation, goal: AxialPosition) -> int:
+        """Return the longest legal path that still reduces the gap to goal, or 0."""
+        here = me.position(observation)
+        current_distance = tile.distance(here, goal)
+        candidates: list[tuple[int, int, int]] = []
+
+        for path_id in action.legal_paths(observation):
+            if path_id == 0:
+                continue
+
+            path_distance = tile.distance(tile.at_path_end(here, path_id), goal)
+            if path_distance < current_distance:
+                candidates.append((-len(paths.decode(path_id)), path_distance, path_id))
+
+        if not candidates:
+            return 0
+        longest_path = min(candidate[0] for candidate in candidates)
+        longest = [candidate for candidate in candidates if candidate[0] == longest_path]
+        return min(longest)[2]
+
 
     # Optional: a reinforcement-learning hook called after every step with that step's
     # transition. Its time counts against the timing and episode budget. The order argument is
