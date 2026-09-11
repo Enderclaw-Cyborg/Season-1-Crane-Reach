@@ -43,14 +43,11 @@ Test the connection with:
 python -m sandbox llm
 ```
 
-## Design Goal
-
-I will have the NPCs move about the village doing random tasks assigned to them.
+### Design Goal
+My plan was to have the archers retreat while continue attacking and have the cavalry units expend their full movement.
 
 ### Reflection
+Getting the NPCs to move randomly was difficult, as trying to input random strategies would make them lose against the AI more frequently. Average scores were in the 30s compared to 80s with the fixed stratagems
 
-I originally would have had each npc focus on one interactable specifically, but that would be boring and repetitive, so I introduced random assignments for each villager.
-
-### AI Disclosure
-
-I used the built in Agents chat in VSCode to assist with creating randomness and understanding of how the code functions.
+### AI disclosure
+The built in AI assistant helped me determine strategies for each player character.
